@@ -38,7 +38,7 @@ export class HelloWorldContribution implements FrontendApplicationContribution {
     private startPolling(editor: monaco.editor.IStandaloneCodeEditor, fileName: string): void {
         const fetchAndApply = async () => {
             try {
-                const res = await fetch('http://127.0.0.1:3100/comment.json');
+                const res = await fetch(`http://${window.location.hostname}:3100/comment.json`);
                 if (!res.ok) throw new Error('comment.json fetch 실패');
                 const comments: CommentJson[] = await res.json();
 
