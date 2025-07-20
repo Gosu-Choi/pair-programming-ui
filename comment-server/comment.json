@@ -1,0 +1,35 @@
+[
+  {
+    "file": "hello world.c",
+    "type": "red underline",
+    "content": "Use printf instead of print",
+    "range": {
+      "startLine": 3,
+      "startColumn": 2,
+      "endLine": 3,
+      "endColumn": 7
+    }
+  },
+  {
+    "file": "hello world.c",
+    "type": "background highlight",
+    "content": "Avoid using global variables",
+    "range": {
+      "startLine": 5,
+      "startColumn": 1,
+      "endLine": 5,
+      "endColumn": 25
+    }
+  },
+  {
+    "file": "hello world.c",
+    "type": "blue underline",
+    "content": "Check memory allocation here",
+    "range": {
+      "startLine": 7,
+      "startColumn": 10,
+      "endLine": 7,
+      "endColumn": 15
+    }
+  }
+]

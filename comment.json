@@ -1,0 +1,11 @@
+{
+  "file": "hello world.c",
+  "type": "red underline",
+  "content": "\"print\" is not supported in C, it should be changed to be printf or fprintf depending on where you intended to show it on.",
+  "range": {
+    "startLine": 3,
+    "startColumn": 2,
+    "endLine": 3,
+    "endColumn": 7
+  }
+}

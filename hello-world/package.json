@@ -1,0 +1,41 @@
+{
+  "name": "hello-world",
+  "keywords": [
+    "theia-extension"
+  ],
+  "theia": {
+    "frontend": {
+      "webpack": {
+        "copy": [
+          {
+            "from": "./comment.json",
+            "to": "comment.json"
+          }
+        ]
+      }
+    }
+  },
+  "version": "0.0.0",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@theia/core": "1.63.3"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "~5.4.5"
+  },
+  "scripts": {
+    "prepare": "yarn run clean && yarn run build",
+    "clean": "rimraf lib",
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/hello-world-frontend-module"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+.decoration-red-underline {
+  text-decoration: red wavy underline;
+}
+
+.decoration-blue-underline {
+  text-decoration: blue wavy underline;
+}
+
+.decoration-background-highlight {
+  background-color: rgba(255, 255, 0, 0.4);
+}
+
+.sticky-note-inline::after {
+    content: '📝';
+    margin-left: 10px;
+    color: gray;
+    opacity: 0.8;
+}
