@@ -11,7 +11,7 @@ import { EditorManager, EditorWidget } from '@theia/editor/lib/browser';
 import * as monaco from '@theia/monaco-editor-core/esm/vs/editor/editor.api';
 
 /* ───────── Types and Constants ───────── */
-type Kind = 'red underline' | 'blue underline' | 'background highlight' | 'sticky note';
+type Kind = 'red underline' | 'orange underline' | 'yellow underline' | 'gray underline' | 'red highlight' |'orange highlight' | 'yellow highlight' | 'gray highlight';
 
 // Interface for comments as they are stored in the external JSON file
 interface ExternalComment {
@@ -129,7 +129,7 @@ export class HelloWorldContribution
     /* ───────── Actual Commands ───────── */
     private findCommentAtCursor(): InternalComment | undefined {
         const ctx = this.currentSelection();
-        if (!ctx){console.log("1"); return;} 
+        if (!ctx){return;} 
         const { monacoEditor, file } = ctx;
         const pos = monacoEditor.getPosition();
         const decorations2 = monacoEditor.getModel()?.getAllDecorations();
@@ -140,14 +140,14 @@ export class HelloWorldContribution
             hover: JSON.stringify(d.options.hoverMessage),
             className: d.options.inlineClassName
         })));
-        if (!pos){console.log("2"); return;}
+        if (!pos){return;}
         // Crucial for collaboration: This method relies on `commentsByFile`,
         // which is kept in sync with the server's JSON via `fetchAndApplyComments`.
         const commentsForFile = this.commentsByFile.get(file);
-        if (!commentsForFile){console.log("3"); return;}
+        if (!commentsForFile){return;}
 
         const model = monacoEditor.getModel();
-        if (!model){console.log("4"); return;}
+        if (!model){return;}
 
         for (const comment of commentsForFile.values()) {
             const range = this.locateAnchor(model, comment.anchor);
@@ -211,9 +211,13 @@ export class HelloWorldContribution
 
         const pickedItem = await this.pick.show([
             { id: 'red underline', label: 'Red underline' },
-            { id: 'blue underline', label: 'Blue underline' },
-            { id: 'background highlight', label: 'Background highlight' },
-            { id: 'sticky note', label: 'Sticky note' }
+            { id: 'orange underline', label: 'Orange underline' },
+            { id: 'yellow underline', label: 'Yellow underline' },
+            { id: 'gray underline', label: 'Gray underline' },
+            { id: 'red highlight', label: 'Red highlight' },
+            { id: 'orange highlight', label: 'Orange highlight' },
+            { id: 'yellow highlight', label: 'Yellow highlight' },
+            { id: 'gray highlight', label: 'Gray uhighlight' }
         ], { placeholder: 'Comment Type' });
 
         if (!pickedItem) return;
@@ -293,19 +297,48 @@ export class HelloWorldContribution
             style.setAttribute('data-comment-style', cls);
             style.textContent = {
                 'red underline': `
-                    .${cls}{text-decoration:underline wavy red;}
-                `,
-                'blue underline': `
-                    .${cls}{text-decoration:underline wavy blue;}
-                `,
-                'background highlight': `
-                    .${cls}{background-color:rgba(255,255,0,.35);}
-                `,
-                'sticky note': `
                     .${cls}{
-                        background-color:rgba(255,255,0,.25);
-                        font-style:italic;
-                        color:orange;
+                    border-bottom: 3px solid red;
+                    padding-bottom: 1px;
+                    }
+                    
+                `,
+                'orange underline': `
+                    .${cls}{
+                    border-bottom: 3px solid orange;
+                    padding-bottom: 1px;
+                    }
+                `,
+                'yellow underline': `
+                    .${cls}{
+                    border-bottom: 3px solid yellow;
+                    padding-bottom: 1px;
+                    }
+                `,
+                'gray underline': `
+                    .${cls}{
+                    border-bottom: 3px solid gray;
+                    padding-bottom: 1px;
+                    }
+                `,
+                'red highlight': `
+                    .${cls}{
+                        background-color: rgba(255, 0, 0, 0.25);
+                    }
+                `,
+                'orange highlight': `
+                    .${cls}{
+                        background-color: rgba(255, 165, 0, 0.25);
+                    }
+                `,
+                'yellow highlight': `
+                    .${cls}{
+                        background-color: rgba(255, 255, 0, 0.35);
+                    }
+                `,
+                'gray highlight': `
+                    .${cls}{
+                        background-color: rgba(128, 128, 128, 0.25);
                     }
                 `
             }[kind];
@@ -410,6 +443,12 @@ export class HelloWorldContribution
                 ? Array.from(prevMap.values()).map(c => c.decorationId!).filter(Boolean)
                 : [];
 
+            const actualDecorationIds = editor.getModel()?.getAllDecorations()?.map(d => d.id);
+            console.log("Actual decorations in Monaco:", actualDecorationIds);
+
+            // B. 우리가 제거하려는 decoration ID (from state)
+            console.log("Old IDs from commentsByFile:", oldIds);
+
             // 4. Prepare new decorations
             const newMap = new Map<string, InternalComment>();
             const decorations: monaco.editor.IModelDeltaDecoration[] = [];
@@ -443,7 +482,11 @@ export class HelloWorldContribution
             })));
 
             // 5. Apply delta decorations (Monaco will remove old + apply new)
-            const newIds = editor.deltaDecorations(oldIds, decorations);
+            const allExistingDecorationIds = editor.getModel()?.getAllDecorations()?.map(d => d.id) ?? [];
+            editor.deltaDecorations(allExistingDecorationIds, []);
+
+            // 새로 추가
+            const newIds = editor.deltaDecorations([], decorations);
 
             // 6. Sync decoration IDs to comment map
             let i = 0;
