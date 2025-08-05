@@ -1,7 +1,6 @@
 import { injectable, inject } from '@theia/core/shared/inversify';
 import {
-    FrontendApplicationContribution,
-    QuickPickService, SingleTextInputDialog
+    FrontendApplicationContribution, QuickPickService
 } from '@theia/core/lib/browser';
 import {
     Command, CommandContribution, MenuContribution,
@@ -18,7 +17,9 @@ interface ExternalComment {
     id: string;
     file: string;
     type: Kind;
+    title: string;
     content: string;
+    suggestion: string;
     anchor: AnchorRange; // Use the existing AnchorRange structure
 }
 
@@ -48,7 +49,7 @@ const COMMENTS_SERVER_URL = `http://${window.location.hostname}:3100`; // Your b
 @injectable()
 export class HelloWorldContribution
     implements FrontendApplicationContribution, CommandContribution, MenuContribution {
-
+    
     /* ===== DI ===== */
     constructor(
         @inject(EditorManager) private readonly editors: EditorManager,
@@ -94,6 +95,41 @@ export class HelloWorldContribution
                             }
                         });
                         this.startPolling(monacoEditor, file);
+                        monacoEditor.onMouseMove((e: monaco.editor.IEditorMouseEvent) => {
+                            const pos = e.target.position;
+                            if (!pos) {
+                                return;
+                            }
+
+                            const model = monacoEditor.getModel();
+                            if (!model) return;
+
+                            const file = this.editors.activeEditor?.editor.uri.path.toString();
+                            const comments = this.commentsByFile.get(file!);
+                            if (!comments) return;
+
+                            for (const comment of comments.values()) {
+                                const range = this.locateAnchor(model, comment.anchor);
+                                if (range.containsPosition(pos)) {
+                                    this.showWidgetAt(range, comment, monacoEditor);
+                                    return;
+                                }
+                            }
+
+                            // 마우스가 밑줄 밖으로 나갔지만 위젯에 올라가 있으면 유지
+                            const isHoveringWidget = this.isHoveringWidget();
+                            if (!isHoveringWidget) {
+                                this.hideWidget(monacoEditor);
+                            }
+                        });
+
+                        // mouse leave 시 위젯 사라지게
+                        monacoEditor.onMouseLeave(() => {
+                            const isHoveringWidget = this.isHoveringWidget();
+                            if (!isHoveringWidget) {
+                                this.hideWidget(monacoEditor);
+                            }
+                        });
                     }
                 }
             }
@@ -112,7 +148,20 @@ export class HelloWorldContribution
             isEnabled: () => true, // Can be refined to be enabled only if findCommentAtCursor returns true
             isVisible: () => true // Can be refined to be visible only if findCommentAtCursor returns true
         });
+        reg.registerCommand({
+            id: 'comment.applySuggestion',
+            label: 'Apply Suggestion'
+        }, {
+            execute: (...args: any[]) => this.applySuggestionFromCommand(args)
+        });
+        reg.registerCommand({
+            id: 'comment.resolve',
+            label: 'Resolve Comment'
+        }, {
+            execute: (...args: any[]) => this.resolveFromCommand(args)
+        });
     }
+    
 
     /* ───────── MenuContribution ───────── */
     registerMenus(menu: MenuModelRegistry): void {
@@ -125,6 +174,163 @@ export class HelloWorldContribution
             { commandId: RESOLVE_COMMENT_CMD.id, order: '2' }
         );
     }
+
+    private isHoveringWidget(): boolean {
+        const widget = this.currentWidget?.getDomNode();
+        if (!widget) return false;
+
+        const hoveredElement = document.querySelector(':hover');
+        return widget.contains(hoveredElement);
+    }
+
+    private async applySuggestionFromCommand(args: any[]): Promise<void> {
+        console.log("we can recognize 1")
+        const idArg = this.parseCommandArg(args, 'id');
+        if (!idArg) return;
+
+        const editor = this.editors.activeEditor;
+        if (!editor) return;
+
+        const monacoEditor = (editor.editor as any)?.getControl?.();
+        const file = editor.editor.uri.path.toString();
+        const model = monacoEditor?.getModel();
+        if (!monacoEditor || !model) return;
+
+        const comments = this.commentsByFile.get(file);
+        if (!comments) return;
+
+        const comment = comments.get(idArg);
+        if (!comment) return;
+
+        const range = this.locateAnchor(model, comment.anchor);
+
+        // ✨ Replace range content
+        model.pushEditOperations([], [{
+            range,
+            text: comment.suggestion
+        }], () => null);
+
+        // 🔁 Reuse existing resolve logic
+        await this.deleteCommentById(comment.id, file);
+        await this.fetchAndApplyComments(monacoEditor, file);
+    }
+
+    private async resolveFromCommand(args: any[]): Promise<void> {
+        console.log("we can recognize 2")
+        const idArg = this.parseCommandArg(args, 'id');
+        if (!idArg) return;
+
+        const editor = this.editors.activeEditor;
+        if (!editor) return;
+
+        const monacoEditor = (editor.editor as any)?.getControl?.();
+        const file = editor.editor.uri.path.toString();
+        if (!monacoEditor) return;
+
+        await this.deleteCommentById(idArg, file);
+        await this.fetchAndApplyComments(monacoEditor, file);
+    }
+
+    private parseCommandArg(args: any[], key: string): string | undefined {
+        if (!args || args.length === 0 || typeof args[0] !== 'string') return;
+        const parsed = new URLSearchParams(args[0].split('?')[1]);
+        return parsed.get(key) ?? undefined;
+    }
+
+    private async deleteCommentById(id: string, file: string): Promise<void> {
+    try {
+        const res = await fetch(`${COMMENTS_SERVER_URL}/comments/${id}`, {
+            method: 'DELETE',
+        });
+        if (!res.ok) {
+            const errorText = await res.text();
+            throw new Error(`Failed to delete comment: ${res.status} ${errorText}`);
+        }
+        this.commentsByFile.get(file)?.delete(id);
+    } catch (err) {
+        console.error('Delete failed:', err);
+    }
+}
+
+private currentWidget: monaco.editor.IContentWidget | undefined;
+
+private showWidgetAt(range: monaco.Range, comment: InternalComment, editor: monaco.editor.IStandaloneCodeEditor) {
+    if (this.currentWidget) editor.removeContentWidget(this.currentWidget);
+
+    const domNode = document.createElement('div');
+    domNode.className = 'comment-tooltip';
+    domNode.style.position = 'absolute';
+    domNode.style.zIndex = '9999';
+    domNode.style.background = 'white';
+    domNode.style.border = '1px solid #e5e7eb'; // Tailwind의 border-gray-200
+    domNode.style.borderRadius = '0.5rem';
+    domNode.style.boxShadow = '0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1)';
+    domNode.style.padding = '0.75rem'; // p-3
+    domNode.style.maxWidth = '24rem'; // max-w-sm
+    domNode.style.pointerEvents = 'auto';
+
+    domNode.innerHTML = `
+    <div style="display:flex; flex-direction:column; gap: 0.5rem;">
+        <div style="font-weight:600; font-size: 0.875rem;">${comment.title}</div>
+        <div style="font-size:0.75rem; color: #6b7280;">${comment.content}</div>
+        ${
+        comment.suggestion
+            ? `<div>
+                <div style="font-size:0.75rem; font-weight:500; margin-bottom:0.25rem;">Suggested Fix:</div>
+                <pre style="font-size:0.75rem; background:#f3f4f6; padding:0.5rem; border-radius:0.375rem; border:1px solid #e5e7eb; overflow-x:auto;">${comment.suggestion}</pre>
+            </div>`
+            : ''
+        }
+        <div style="display:flex; gap: 0.5rem; margin-top:0.5rem;">
+        <button id="apply" style="font-size:0.75rem; padding: 0.25rem 0.5rem; background-color: #10b981; color: white; border-radius: 0.25rem; border: none;">Apply</button>
+        <button id="resolve" style="font-size:0.75rem; padding: 0.25rem 0.5rem; background-color: #f87171; color: white; border-radius: 0.25rem; border: none;">Resolve</button>
+        </div>
+    </div>
+    `;
+
+    domNode.querySelector('#apply')?.addEventListener('click', async () => {
+        await this.applySuggestionDirect(comment, editor);
+        this.hideWidget(editor);
+    });
+
+    domNode.querySelector('#resolve')?.addEventListener('click', async () => {
+        await this.deleteCommentById(comment.id, comment.file);
+        await this.fetchAndApplyComments(editor, comment.file);
+        this.hideWidget(editor);
+    });
+
+    const widget: monaco.editor.IContentWidget = {
+        getId: () => 'comment-widget',
+        getDomNode: () => domNode,
+        getPosition: () => ({ position: range.getStartPosition(), preference: [monaco.editor.ContentWidgetPositionPreference.ABOVE,
+    monaco.editor.ContentWidgetPositionPreference.BELOW] })
+    };
+
+    editor.addContentWidget(widget);
+    this.currentWidget = widget;
+}
+
+private async applySuggestionDirect(comment: InternalComment, editor: monaco.editor.IStandaloneCodeEditor): Promise<void> {
+    const model = editor.getModel();
+    if (!model) return;
+
+    const range = this.locateAnchor(model, comment.anchor);
+
+    model.pushEditOperations([], [{
+        range,
+        text: comment.suggestion
+    }], () => null);
+
+    await this.deleteCommentById(comment.id, comment.file);
+    await this.fetchAndApplyComments(editor, comment.file);
+}
+
+private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
+    if (this.currentWidget) {
+        editor.removeContentWidget(this.currentWidget);
+        this.currentWidget = undefined;
+    }
+}
 
     /* ───────── Actual Commands ───────── */
     private findCommentAtCursor(): InternalComment | undefined {
@@ -217,23 +423,24 @@ export class HelloWorldContribution
             { id: 'red highlight', label: 'Red highlight' },
             { id: 'orange highlight', label: 'Orange highlight' },
             { id: 'yellow highlight', label: 'Yellow highlight' },
-            { id: 'gray highlight', label: 'Gray uhighlight' }
+            { id: 'gray highlight', label: 'Gray highlight' }
         ], { placeholder: 'Comment Type' });
 
         if (!pickedItem) return;
 
         const picked = pickedItem.id as Kind;
+        const result = await new MultiInputDialog().open();
+        if (!result) return;
 
-        const dlg = new SingleTextInputDialog({ title: 'Comment', placeholder: 'Comment text…' });
-        const content = await dlg.open();
-        if (!content) { return; }
+        const { title, content, suggestion } = result;
 
-        // Construct the new comment object with the `anchor` property.
         const newComment: ExternalComment = {
             id: `c-${Date.now()}`,
             file,
             type: picked,
+            title,
             content,
+            suggestion,
             anchor: this.makeAnchor(monacoEditor.getModel()!, range)
         };
 
@@ -359,40 +566,37 @@ export class HelloWorldContribution
     }
 
     private locateAnchor(model: monaco.editor.ITextModel, a: AnchorRange): monaco.Range {
-        // First, try to find the exact text starting near the original position.
-        const searchStartPosition = new monaco.Position(a.startLineNumber, a.startColumn);
-
-        const foundMatch = model.findNextMatch(
-            a.text,
-            searchStartPosition,
-            false, // no regex
-            false, // no case sensitive
-            null,  // no whole word (use null instead of false for wordSeparators)
-            true   // capture matches
+        const originalRange = new monaco.Range(
+            a.startLineNumber, a.startColumn,
+            a.endLineNumber, a.endColumn
         );
+        const currentText = model.getValueInRange(originalRange);
 
-        if (foundMatch && foundMatch.range.startLineNumber >= a.startLineNumber) {
-            return foundMatch.range;
+        if (currentText === a.text) {
+            return originalRange;
         }
 
-        // If that fails, try finding it anywhere in the model (broader search).
-        const broaderSearchMatch = model.findNextMatch(
-            a.text,
-            new monaco.Position(1, 1), // Start search from beginning of the file
-            false, // no regex
-            false, // no case sensitive
-            null,  // no whole word
-            true   // capture matches
+        const searchStart = new monaco.Position(a.startLineNumber, a.startColumn);
+        const match = model.findNextMatch(
+            a.text, searchStart, false, false, null, true
         );
 
-        if (broaderSearchMatch) {
-            console.warn(`Comment text found at a different location for comment originally at ${a.startLineNumber}:${a.startColumn}.`);
-            return broaderSearchMatch.range;
+        if (match && match.range.startLineNumber >= a.startLineNumber) {
+            return match.range;
         }
 
-        // As a last resort, fall back to the original coordinates.
+        const allMatches = model.findMatches(a.text, true, false, false, null, true);
+        if (allMatches.length > 0) {
+            const nearest = allMatches.reduce((prev, curr) => {
+                const prevDist = Math.abs(prev.range.startLineNumber - a.startLineNumber);
+                const currDist = Math.abs(curr.range.startLineNumber - a.startLineNumber);
+                return currDist < prevDist ? curr : prev;
+            });
+            return nearest.range;
+        }
+
         console.warn(`Could not locate comment anchor text reliably. Falling back to original coordinates for comment originally at ${a.startLineNumber}:${a.startColumn}.`);
-        return new monaco.Range(a.startLineNumber, a.startColumn, a.endLineNumber, a.endColumn);
+        return originalRange;
     }
 
     /* ───────── Polling and Restoration ───────── */
@@ -460,7 +664,6 @@ export class HelloWorldContribution
                 decorations.push({
                     range,
                     options: {
-                        hoverMessage: { value: comment.content },
                         inlineClassName: this.ensureCss(comment.type),
                         stickiness: monaco.editor.TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges,
                     }
@@ -500,5 +703,62 @@ export class HelloWorldContribution
         } catch (err) {
             console.error('Error in fetchAndApplyComments:', err);
         }
+    }
+}
+
+class MultiInputDialog {
+    async open(): Promise<{ title: string; content: string; suggestion: string } | undefined> {
+        return new Promise((resolve) => {
+            const wrapper = document.createElement('div');
+            wrapper.style.padding = '1em';
+            wrapper.innerHTML = `
+                <h3 style="margin-bottom: 0.5em;">Add Comment</h3>
+                <label>Title:</label><br>
+                <input type="text" id="multi-title" style="width: 100%; margin-bottom: 0.5em;"><br>
+                <label>Content:</label><br>
+                <textarea id="multi-content" rows="3" style="width: 100%; margin-bottom: 0.5em;"></textarea><br>
+                <label>Suggestion:</label><br>
+                <textarea id="multi-suggestion" rows="2" style="width: 100%; margin-bottom: 0.5em;"></textarea><br>
+                <div style="text-align: right;">
+                    <button id="multi-cancel">Cancel</button>
+                    <button id="multi-submit">Submit</button>
+                </div>
+            `;
+
+            const dialog = document.createElement('div');
+            dialog.style.position = 'fixed';
+            dialog.style.top = '50%';
+            dialog.style.left = '50%';
+            dialog.style.transform = 'translate(-50%, -50%)';
+            dialog.style.zIndex = '9999';
+            dialog.style.background = 'white';
+            dialog.style.border = '1px solid #ccc';
+            dialog.style.boxShadow = '0 2px 10px rgba(0,0,0,0.3)';
+            dialog.style.padding = '1em';
+            dialog.appendChild(wrapper);
+            document.body.appendChild(dialog);
+
+            const cleanup = () => {
+                document.body.removeChild(dialog);
+            };
+
+            wrapper.querySelector('#multi-submit')?.addEventListener('click', () => {
+                const title = (wrapper.querySelector('#multi-title') as HTMLInputElement).value.trim();
+                const content = (wrapper.querySelector('#multi-content') as HTMLTextAreaElement).value.trim();
+                const suggestion = (wrapper.querySelector('#multi-suggestion') as HTMLTextAreaElement).value.trim();
+
+                if (title && content && suggestion) {
+                    cleanup();
+                    resolve({ title, content, suggestion });
+                } else {
+                    alert('All fields must be filled out.');
+                }
+            });
+
+            wrapper.querySelector('#multi-cancel')?.addEventListener('click', () => {
+                cleanup();
+                resolve(undefined);
+            });
+        });
     }
 }
