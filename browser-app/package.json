@@ -14,7 +14,9 @@
     "@theia/process": "1.63.3",
     "@theia/terminal": "1.63.3",
     "@theia/workspace": "1.63.3",
-    "hello-world": "0.0.0"
+    "hello-world": "0.0.0",
+    "@theia/plugin-ext": "1.63.3",
+    "@theia/plugin-ext-vscode": "1.63.3"
   },
   "devDependencies": {
     "@theia/cli": "1.63.3"

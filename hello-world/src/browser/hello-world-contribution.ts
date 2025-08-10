@@ -11,7 +11,7 @@ import * as monaco from '@theia/monaco-editor-core/esm/vs/editor/editor.api';
 
 /* ───────── Types and Constants ───────── */
 type Kind = 'red underline' | 'orange underline' | 'yellow underline' | 'gray underline' | 'red highlight' |'orange highlight' | 'yellow highlight' | 'gray highlight';
-
+const OUR_DECORATION_PREFIX = 'jitc';
 // Interface for comments as they are stored in the external JSON file
 interface ExternalComment {
     id: string;
@@ -498,7 +498,7 @@ private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
 
     /* ───────── Decoration CSS Helper ───────── */
     private ensureCss(kind: Kind): string {
-        const cls = `c-${kind.replace(/ /g, '-')}`;
+        const cls = `${OUR_DECORATION_PREFIX}-${kind.replace(/ /g, '-')}`;
         if (!document.querySelector(`style[data-comment-style="${cls}"]`)) {
             const style = document.createElement('style');
             style.setAttribute('data-comment-style', cls);
@@ -630,7 +630,6 @@ private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
 
     private async fetchAndApplyComments(editor: monaco.editor.IStandaloneCodeEditor, fileName: string): Promise<void> {
         try {
-            // 1. Fetch comments from server
             const res = await fetch(`${COMMENTS_SERVER_URL}/comment.json`);
             if (!res.ok) {
                 const errorText = await res.text();
@@ -638,10 +637,8 @@ private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
             }
             const externalComments: ExternalComment[] = await res.json();
 
-            // 2. Filter comments for this file
             const commentsForFile = externalComments.filter(c => c.file === fileName);
 
-            // 3. Extract previous decoration IDs from stored map (if any)
             const prevMap = this.commentsByFile.get(fileName);
             const oldIds = prevMap
                 ? Array.from(prevMap.values()).map(c => c.decorationId!).filter(Boolean)
@@ -650,10 +647,8 @@ private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
             const actualDecorationIds = editor.getModel()?.getAllDecorations()?.map(d => d.id);
             console.log("Actual decorations in Monaco:", actualDecorationIds);
 
-            // B. 우리가 제거하려는 decoration ID (from state)
             console.log("Old IDs from commentsByFile:", oldIds);
 
-            // 4. Prepare new decorations
             const newMap = new Map<string, InternalComment>();
             const decorations: monaco.editor.IModelDeltaDecoration[] = [];
 
@@ -684,20 +679,24 @@ private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
                 className: d.options.inlineClassName
             })));
 
-            // 5. Apply delta decorations (Monaco will remove old + apply new)
-            const allExistingDecorationIds = editor.getModel()?.getAllDecorations()?.map(d => d.id) ?? [];
-            editor.deltaDecorations(allExistingDecorationIds, []);
+            const model = editor.getModel();
+            if (!model) return;
 
-            // 새로 추가
-            const newIds = editor.deltaDecorations([], decorations);
+            const ourDecorationIds =
+                model.getAllDecorations()
+                    .filter(d => {
+                        const cls = d.options.inlineClassName;
+                        return typeof cls === 'string' && cls.includes(`${OUR_DECORATION_PREFIX}-`);
+                    })
+                    .map(d => d.id);
 
-            // 6. Sync decoration IDs to comment map
+            const newIds = editor.deltaDecorations(ourDecorationIds, decorations);
+
             let i = 0;
             for (const comment of newMap.values()) {
                 comment.decorationId = newIds[i++];
             }
 
-            // 7. Save updated map
             this.commentsByFile.set(fileName, newMap);
 
         } catch (err) {
