@@ -20,6 +20,7 @@ interface ExternalComment {
     title: string;
     content: string;
     suggestion: string;
+    is_suggesting: boolean;
     anchor: AnchorRange; // Use the existing AnchorRange structure
 }
 
@@ -96,17 +97,26 @@ export class HelloWorldContribution
                         });
                         this.startPolling(monacoEditor, file);
                         monacoEditor.onMouseMove((e: monaco.editor.IEditorMouseEvent) => {
-                            const pos = e.target.position;
-                            if (!pos) {
-                                return;
-                            }
-
                             const model = monacoEditor.getModel();
                             if (!model) return;
 
                             const file = this.editors.activeEditor?.editor.uri.path.toString();
-                            const comments = this.commentsByFile.get(file!);
-                            if (!comments) return;
+                            const comments = file ? this.commentsByFile.get(file) : undefined;
+
+                            const overWidget = this.widgetHover || this.isPointInsideWidgetFromEvent(e);
+                            const pos = e.target.position;
+
+                            // 1) 텍스트 위치가 아닐 때: 위젯 위가 아니면 숨김
+                            if (!pos) {
+                                if (!overWidget) this.hideWidget(monacoEditor);
+                                return;
+                            }
+
+                            // 2) 텍스트 위치일 때: 앵커 범위 위면 표시, 아니면 (위젯 위가 아니면) 숨김
+                            if (!comments) {
+                                if (!overWidget) this.hideWidget(monacoEditor);
+                                return;
+                            }
 
                             for (const comment of comments.values()) {
                                 const range = this.locateAnchor(model, comment.anchor);
@@ -116,19 +126,12 @@ export class HelloWorldContribution
                                 }
                             }
 
-                            // 마우스가 밑줄 밖으로 나갔지만 위젯에 올라가 있으면 유지
-                            const isHoveringWidget = this.isHoveringWidget();
-                            if (!isHoveringWidget) {
-                                this.hideWidget(monacoEditor);
-                            }
+                            if (!overWidget) this.hideWidget(monacoEditor);
                         });
 
                         // mouse leave 시 위젯 사라지게
                         monacoEditor.onMouseLeave(() => {
-                            const isHoveringWidget = this.isHoveringWidget();
-                            if (!isHoveringWidget) {
-                                this.hideWidget(monacoEditor);
-                            }
+                            if (!this.widgetHover) this.hideWidget(monacoEditor);
                         });
                     }
                 }
@@ -175,13 +178,13 @@ export class HelloWorldContribution
         );
     }
 
-    private isHoveringWidget(): boolean {
-        const widget = this.currentWidget?.getDomNode();
-        if (!widget) return false;
+    // private isHoveringWidget(): boolean {
+    //     const widget = this.currentWidget?.getDomNode();
+    //     if (!widget) return false;
 
-        const hoveredElement = document.querySelector(':hover');
-        return widget.contains(hoveredElement);
-    }
+    //     const hoveredElement = document.querySelector(':hover');
+    //     return widget.contains(hoveredElement);
+    // }
 
     private async applySuggestionFromCommand(args: any[]): Promise<void> {
         console.log("we can recognize 1")
@@ -253,46 +256,56 @@ export class HelloWorldContribution
 }
 
 private currentWidget: monaco.editor.IContentWidget | undefined;
-
+private widgetHover = false;
 private showWidgetAt(range: monaco.Range, comment: InternalComment, editor: monaco.editor.IStandaloneCodeEditor) {
     if (this.currentWidget) editor.removeContentWidget(this.currentWidget);
+
+    const showSuggestion = !!comment.is_suggesting && !!comment.suggestion?.trim();
 
     const domNode = document.createElement('div');
     domNode.className = 'comment-tooltip';
     domNode.style.position = 'absolute';
     domNode.style.zIndex = '9999';
     domNode.style.background = 'white';
-    domNode.style.border = '1px solid #e5e7eb'; // Tailwind의 border-gray-200
+    domNode.style.border = '1px solid #e5e7eb';
     domNode.style.borderRadius = '0.5rem';
     domNode.style.boxShadow = '0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1)';
-    domNode.style.padding = '0.75rem'; // p-3
-    domNode.style.maxWidth = '24rem'; // max-w-sm
+    domNode.style.padding = '0.75rem';
+    domNode.style.maxWidth = '24rem';
     domNode.style.pointerEvents = 'auto';
 
     domNode.innerHTML = `
-    <div style="display:flex; flex-direction:column; gap: 0.5rem;">
+      <div style="display:flex; flex-direction:column; gap: 0.5rem;">
         <div style="font-weight:600; font-size: 0.875rem;">${comment.title}</div>
         <div style="font-size:0.75rem; color: #6b7280;">${comment.content}</div>
         ${
-        comment.suggestion
+          showSuggestion
             ? `<div>
-                <div style="font-size:0.75rem; font-weight:500; margin-bottom:0.25rem;">Suggested Fix:</div>
-                <pre style="font-size:0.75rem; background:#f3f4f6; padding:0.5rem; border-radius:0.375rem; border:1px solid #e5e7eb; overflow-x:auto;">${comment.suggestion}</pre>
-            </div>`
+                 <div style="font-size:0.75rem; font-weight:500; margin-bottom:0.25rem;">Suggested Fix:</div>
+                 <pre style="font-size:0.75rem; background:#f3f4f6; padding:0.5rem; border-radius:0.375rem; border:1px solid #e5e7eb; overflow-x:auto; white-space:pre-wrap; overflow-wrap:break-word;">${comment.suggestion}</pre>
+               </div>`
             : ''
         }
         <div style="display:flex; gap: 0.5rem; margin-top:0.5rem;">
-        <button id="apply" style="font-size:0.75rem; padding: 0.25rem 0.5rem; background-color: #10b981; color: white; border-radius: 0.25rem; border: none;">Apply</button>
-        <button id="resolve" style="font-size:0.75rem; padding: 0.25rem 0.5rem; background-color: #f87171; color: white; border-radius: 0.25rem; border: none;">Resolve</button>
+          ${ showSuggestion
+              ? `<button id="apply" style="font-size:0.75rem; padding: 0.25rem 0.5rem; background-color: #10b981; color: white; border-radius: 0.25rem; border: none;">Apply</button>`
+              : ''
+            }
+          <button id="resolve" style="font-size:0.75rem; padding: 0.25rem 0.5rem; background-color: #f87171; color: white; border-radius: 0.25rem; border: none;">Resolve</button>
         </div>
-    </div>
+      </div>
     `;
 
-    domNode.querySelector('#apply')?.addEventListener('click', async () => {
-        await this.applySuggestionDirect(comment, editor);
-        this.hideWidget(editor);
-    });
+    // Apply: 있을 때만 리스너 바인딩
+    const applyBtn = domNode.querySelector<HTMLButtonElement>('#apply');
+    if (applyBtn) {
+        applyBtn.addEventListener('click', async () => {
+            await this.applySuggestionDirect(comment, editor);
+            this.hideWidget(editor);
+        });
+    }
 
+    // Resolve: 항상 가능
     domNode.querySelector('#resolve')?.addEventListener('click', async () => {
         await this.deleteCommentById(comment.id, comment.file);
         await this.fetchAndApplyComments(editor, comment.file);
@@ -302,12 +315,20 @@ private showWidgetAt(range: monaco.Range, comment: InternalComment, editor: mona
     const widget: monaco.editor.IContentWidget = {
         getId: () => 'comment-widget',
         getDomNode: () => domNode,
-        getPosition: () => ({ position: range.getStartPosition(), preference: [monaco.editor.ContentWidgetPositionPreference.ABOVE,
-    monaco.editor.ContentWidgetPositionPreference.BELOW] })
+        getPosition: () => ({
+            position: range.getStartPosition(),
+            preference: [
+                monaco.editor.ContentWidgetPositionPreference.ABOVE,
+                monaco.editor.ContentWidgetPositionPreference.BELOW
+            ]
+        })
     };
 
     editor.addContentWidget(widget);
     this.currentWidget = widget;
+
+    domNode.addEventListener('mouseenter', () => this.widgetHover = true);
+    domNode.addEventListener('mouseleave', () => this.widgetHover = false);
 }
 
 private async applySuggestionDirect(comment: InternalComment, editor: monaco.editor.IStandaloneCodeEditor): Promise<void> {
@@ -330,6 +351,7 @@ private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
         editor.removeContentWidget(this.currentWidget);
         this.currentWidget = undefined;
     }
+    this.widgetHover = false;
 }
 
     /* ───────── Actual Commands ───────── */
@@ -415,6 +437,7 @@ private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
         if (!ctx) { return; }
         const { editorWidget, monacoEditor, file, range } = ctx;
 
+        // 1) 타입 선택 (그대로)
         const pickedItem = await this.pick.show([
             { id: 'red underline', label: 'Red underline' },
             { id: 'orange underline', label: 'Orange underline' },
@@ -425,22 +448,31 @@ private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
             { id: 'yellow highlight', label: 'Yellow highlight' },
             { id: 'gray highlight', label: 'Gray highlight' }
         ], { placeholder: 'Comment Type' });
-
         if (!pickedItem) return;
-
         const picked = pickedItem.id as Kind;
-        const result = await new MultiInputDialog().open();
-        if (!result) return;
 
+        // 2) 제안 여부 Yes/No 먼저 묻기
+        const suggestPick = await this.pick.show(
+            [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }],
+            { placeholder: 'Do you suggest something?' }
+        );
+        if (!suggestPick) return;
+        const isSuggesting = suggestPick.id === 'yes';
+
+        // 3) 입력 다이얼로그(제안 여부에 따라 suggestion 필드 표시/검증)
+        const result = await new MultiInputDialog({ askSuggestion: isSuggesting }).open();
+        if (!result) return;
         const { title, content, suggestion } = result;
 
+        // 4) 서버로 저장할 코멘트 구성 (is_suggesting 반영)
         const newComment: ExternalComment = {
             id: `c-${Date.now()}`,
             file,
             type: picked,
             title,
             content,
-            suggestion,
+            suggestion: isSuggesting ? suggestion : '',
+            is_suggesting: isSuggesting,               // ← 저장
             anchor: this.makeAnchor(monacoEditor.getModel()!, range)
         };
 
@@ -703,21 +735,40 @@ private hideWidget(editor: monaco.editor.IStandaloneCodeEditor) {
             console.error('Error in fetchAndApplyComments:', err);
         }
     }
+    
+    private isPointInsideWidgetFromEvent(e: monaco.editor.IEditorMouseEvent): boolean {
+        const node = this.currentWidget?.getDomNode();
+        if (!node) return false;
+        const be = (e.event as any)?.browserEvent as MouseEvent | undefined;
+        const x = be?.clientX ?? (e.event as any)?.posx;
+        const y = be?.clientY ?? (e.event as any)?.posy;
+        if (typeof x !== 'number' || typeof y !== 'number') return false;
+        return document.elementsFromPoint(x, y).includes(node);
+    }
 }
 
+
+
 class MultiInputDialog {
+    constructor(private opts: { askSuggestion: boolean } = { askSuggestion: true }) {}
+
     async open(): Promise<{ title: string; content: string; suggestion: string } | undefined> {
         return new Promise((resolve) => {
             const wrapper = document.createElement('div');
             wrapper.style.padding = '1em';
+
+            const suggestionBlock = this.opts.askSuggestion ? `
+                <label>Suggestion:</label><br>
+                <textarea id="multi-suggestion" rows="2" style="width: 100%; margin-bottom: 0.5em;"></textarea><br>
+            ` : '';
+
             wrapper.innerHTML = `
                 <h3 style="margin-bottom: 0.5em;">Add Comment</h3>
                 <label>Title:</label><br>
                 <input type="text" id="multi-title" style="width: 100%; margin-bottom: 0.5em;"><br>
                 <label>Content:</label><br>
                 <textarea id="multi-content" rows="3" style="width: 100%; margin-bottom: 0.5em;"></textarea><br>
-                <label>Suggestion:</label><br>
-                <textarea id="multi-suggestion" rows="2" style="width: 100%; margin-bottom: 0.5em;"></textarea><br>
+                ${suggestionBlock}
                 <div style="text-align: right;">
                     <button id="multi-cancel">Cancel</button>
                     <button id="multi-submit">Submit</button>
@@ -737,21 +788,28 @@ class MultiInputDialog {
             dialog.appendChild(wrapper);
             document.body.appendChild(dialog);
 
-            const cleanup = () => {
-                document.body.removeChild(dialog);
-            };
+            const cleanup = () => document.body.removeChild(dialog);
 
             wrapper.querySelector('#multi-submit')?.addEventListener('click', () => {
                 const title = (wrapper.querySelector('#multi-title') as HTMLInputElement).value.trim();
                 const content = (wrapper.querySelector('#multi-content') as HTMLTextAreaElement).value.trim();
-                const suggestion = (wrapper.querySelector('#multi-suggestion') as HTMLTextAreaElement).value.trim();
+                let suggestion = '';
 
-                if (title && content && suggestion) {
-                    cleanup();
-                    resolve({ title, content, suggestion });
-                } else {
-                    alert('All fields must be filled out.');
+                if (this.opts.askSuggestion) {
+                    suggestion = (wrapper.querySelector('#multi-suggestion') as HTMLTextAreaElement).value.trim();
                 }
+
+                if (!title || !content) {
+                    alert('Title and Content must be filled out.');
+                    return;
+                }
+                if (this.opts.askSuggestion && !suggestion) {
+                    alert('Suggestion must be filled out.');
+                    return;
+                }
+
+                cleanup();
+                resolve({ title, content, suggestion });
             });
 
             wrapper.querySelector('#multi-cancel')?.addEventListener('click', () => {
@@ -761,3 +819,4 @@ class MultiInputDialog {
         });
     }
 }
+
